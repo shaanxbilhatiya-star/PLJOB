@@ -774,8 +774,6 @@ async function saveFile() {
     docStatusLine('CIBIL Report',    'up_cibil'),
     docStatusLine('Salary Slips',    'up_salary'),
     docStatusLine('Bank Statement',  'up_bank'),
-    ...(pwSalary?['','[🔐] Salary slip PDF password : '+pwSalary]:[]),
-    ...(pwBank?['[🔐] Bank statement PDF password : '+pwBank]:[]),
     '',
     '============================================================',
     'Generated on : ' + new Date().toLocaleString('en-IN'),

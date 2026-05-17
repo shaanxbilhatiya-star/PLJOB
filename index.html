@@ -8,6 +8,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script>emailjs.init('xmb-DCTpxRQw87eE9');</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -788,16 +790,71 @@ async function saveFile() {
 
   function ext(file) { const p = file.name.split('.'); return p.length>1?'.'+p.pop().toLowerCase():''; }
 
-  // ── PDF PASSWORD REMOVAL ──────────────────────────────────────────────
+  // ── PDF PASSWORD REMOVAL (PDF.js render → pdf-lib rebuild) ───────────
+  // pdf-lib alone cannot truly strip encryption. We use PDF.js to render
+  // every page to a canvas at 2× scale, then reassemble into a brand-new
+  // unprotected PDF with pdf-lib. Result is always password-free.
   async function unlockPdf(file, password) {
     try {
       const arrBuf = await file.arrayBuffer();
-      const pdfDoc = await PDFLib.PDFDocument.load(arrBuf, { password: password });
-      const unlockedBytes = await pdfDoc.save({ useObjectStreams: false });
+
+      // 1. Open with PDF.js (supports all encryption types including AES-256)
+      const loadTask = pdfjsLib.getDocument({
+        data: new Uint8Array(arrBuf),
+        password: password,
+        verbosity: 0
+      });
+      const pdfJsDoc = await loadTask.promise;
+      const totalPages = pdfJsDoc.numPages;
+
+      // 2. Create a fresh, unencrypted PDF with pdf-lib
+      const newPdf = await PDFLib.PDFDocument.create();
+
+      for (let p = 1; p <= totalPages; p++) {
+        const page = await pdfJsDoc.getPage(p);
+        const vp = page.getViewport({ scale: 2.0 }); // 2× = ~150 dpi
+
+        // Render page to an off-screen canvas
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+        // Convert canvas → JPEG bytes
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        const b64     = dataUrl.split(',')[1];
+        const jpgBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+        // Embed JPEG into the new PDF page
+        const jpgImage = await newPdf.embedJpg(jpgBytes);
+        const newPage  = newPdf.addPage([vp.width, vp.height]);
+        newPage.drawImage(jpgImage, { x: 0, y: 0, width: vp.width, height: vp.height });
+      }
+
+      const unlockedBytes = await newPdf.save();
+      console.log(`✅ Unlocked ${file.name} (${totalPages} pages)`);
       return new File([unlockedBytes], file.name, { type: 'application/pdf' });
+
     } catch(e) {
-      console.warn('PDF unlock failed for', file.name, ':', e.message);
-      return file; // fallback: use original file
+      // Surface the real error so the agent knows what went wrong
+      const msg = e?.message || String(e);
+      const isWrongPw = /password/i.test(msg) || /incorrect/i.test(msg) || /PasswordException/i.test(msg);
+      const label = isWrongPw
+        ? `❌ Wrong password for "${file.name}" — PDF added as-is (still locked).`
+        : `⚠ Could not unlock "${file.name}": ${msg} — PDF added as-is.`;
+      console.warn(label);
+      // Show a brief non-blocking toast so the user is aware
+      const toast = document.getElementById('val-toast');
+      if (toast) {
+        toast.style.background = isWrongPw
+          ? 'linear-gradient(135deg,#dc2626,#b91c1c)'
+          : 'linear-gradient(135deg,#d97706,#b45309)';
+        toast.textContent = label;
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 5000);
+      }
+      return file; // fallback: original locked file
     }
   }
 

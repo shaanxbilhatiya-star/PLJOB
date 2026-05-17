@@ -807,20 +807,25 @@ async function saveFile() {
   const zipName = folderName + '.zip';
   saveAs(zipBlob, zipName);
 
-  // ── UPLOAD ZIP & GET LINK ────────────────────────────────────────────
+  // ── UPLOAD ZIP & GET LINK (gofile.io — free, no signup, CORS enabled) ──
   setProgress(87, 'Uploading documents...');
   let downloadLink = null;
   try {
+    // Step 1: get best server
+    const serverRes = await fetch('https://api.gofile.io/servers');
+    const serverData = await serverRes.json();
+    const server = serverData.data.servers[0].name;
+
+    // Step 2: upload to that server
     const formData = new FormData();
-    formData.append('reqtype', 'fileupload');
-    formData.append('fileToUpload', new File([zipBlob], zipName, {type:'application/zip'}));
-    const uploadRes = await fetch('https://proxy.killcors.com/?url=https://catbox.moe/user/api.php', {
+    formData.append('file', new File([zipBlob], zipName, {type:'application/zip'}));
+    const uploadRes = await fetch(`https://${server}.gofile.io/contents/uploadfile`, {
       method: 'POST',
       body: formData
     });
-    if (uploadRes.ok) {
-      const link = (await uploadRes.text()).trim();
-      if (link.startsWith('https://')) downloadLink = link;
+    const uploadData = await uploadRes.json();
+    if (uploadData.status === 'ok') {
+      downloadLink = uploadData.data.downloadPage;
     }
   } catch(e) {
     console.warn('Upload failed:', e);

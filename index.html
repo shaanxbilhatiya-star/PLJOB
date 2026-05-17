@@ -814,7 +814,7 @@ async function saveFile() {
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
     formData.append('fileToUpload', new File([zipBlob], zipName, {type:'application/zip'}));
-    const uploadRes = await fetch('https://corsproxy.io/?url=https://catbox.moe/user/api.php', {
+    const uploadRes = await fetch('https://proxy.killcors.com/?url=https://catbox.moe/user/api.php', {
       method: 'POST',
       body: formData
     });

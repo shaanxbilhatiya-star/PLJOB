@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script>emailjs.init('xmb-DCTpxRQw87eE9');</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -733,8 +734,8 @@ async function saveFile() {
     'Work email         : ' + (val('f_work_email')||'—'),
     'Experience         : ' + val('f_exp'),
     'Monthly income     : ' + val('f_income'),
-    'Salary slip PWD    : ' + (pwSalary?'[PROVIDED — unlock before use]':'None'),
-    'Bank stmt PWD      : ' + (pwBank?'[PROVIDED — unlock before use]':'None'),
+    'Salary slip PWD    : ' + (pwSalary?'[PROVIDED — PDFs auto-unlocked in ZIP]':'None'),
+    'Bank stmt PWD      : ' + (pwBank?'[PROVIDED — PDFs auto-unlocked in ZIP]':'None'),
     '',
     '------------------------------------------------------------',
     'REQUIRED AMOUNT BY CUSTOMER',
@@ -786,10 +787,30 @@ async function saveFile() {
   const docs = zip.folder('Documents');
 
   function ext(file) { const p = file.name.split('.'); return p.length>1?'.'+p.pop().toLowerCase():''; }
-  async function addFiles(inputId, prefix) {
+
+  // ── PDF PASSWORD REMOVAL ──────────────────────────────────────────────
+  async function unlockPdf(file, password) {
+    try {
+      const arrBuf = await file.arrayBuffer();
+      const pdfDoc = await PDFLib.PDFDocument.load(arrBuf, { password: password });
+      const unlockedBytes = await pdfDoc.save({ useObjectStreams: false });
+      return new File([unlockedBytes], file.name, { type: 'application/pdf' });
+    } catch(e) {
+      console.warn('PDF unlock failed for', file.name, ':', e.message);
+      return file; // fallback: use original file
+    }
+  }
+
+  async function addFiles(inputId, prefix, password) {
     const fs = files(inputId);
     for (let i=0;i<fs.length;i++) {
-      docs.file(prefix + (fs.length>1?'_'+(i+1):'') + ext(fs[i]), fs[i]);
+      const fileExt = ext(fs[i]);
+      const fname = prefix + (fs.length>1?'_'+(i+1):'') + fileExt;
+      let finalFile = fs[i];
+      if (password && fileExt === '.pdf') {
+        finalFile = await unlockPdf(fs[i], password);
+      }
+      docs.file(fname, finalFile);
     }
   }
 
@@ -798,8 +819,8 @@ async function saveFile() {
   setProgress(33,'Adding photo...');       await addFiles('up_photo','Passport_Photo');
   setProgress(43,'Adding elec bill...');   await addFiles('up_elec','Electricity_Bill');
   setProgress(53,'Adding CIBIL...');       await addFiles('up_cibil','CIBIL_Report');
-  setProgress(63,'Adding salary slips...'); await addFiles('up_salary','Salary_Slip');
-  setProgress(73,'Adding bank stmt...');   await addFiles('up_bank','Bank_Statement');
+  setProgress(63,'Unlocking & adding salary slips...'); await addFiles('up_salary','Salary_Slip', val('pw_salary'));
+  setProgress(73,'Unlocking & adding bank stmt...');   await addFiles('up_bank','Bank_Statement', val('pw_bank'));
 
   zip.file('Applicant_Info.txt', txt);
   setProgress(82, 'Compressing ZIP...');
@@ -825,7 +846,8 @@ async function saveFile() {
     });
     const uploadData = await uploadRes.json();
     if (uploadData.status === 'ok') {
-      downloadLink = uploadData.data.downloadPage;
+      const fileId = uploadData.data.id;
+      downloadLink = `https://store1.gofile.io/download/direct/${fileId}/${zipName}`;
     }
   } catch(e) {
     console.warn('Upload failed:', e);
